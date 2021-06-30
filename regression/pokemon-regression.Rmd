@@ -1,0 +1,237 @@
+---
+title: "Pokemon Card Multiple Linear Regression Analysis"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Pokemon Card Multi-Linear Regression Analysis 
+
+For full scope of this project, please visit this link: 
+
+I wanted to take this sample dataset of Pokemon Card prices from TCG Player to see how well the type of rarity and card type of different Pokemon Cards could explain the market price. Is multiple regression a reasonable approach to find this answer? Below I've taken some steps to find out. The purpose of this project is purely for working on my data analytics skill-set.
+
+
+# Part 1: Exploratory Data Analysis
+
+I've read in two versions of the dataset. One is only including the Rarity and Card Type columns that has been transposed using pd.get_dummies() from my data-prep.py program. Then other set is inclusive of all columns for the purpose of plotting certain graphs.
+
+```{r}
+library(MASS)
+library(car)
+data <- read.csv("rarity-card-type.csv", header=TRUE)
+data2 <- read.csv("pokemon-card-price.csv", header=TRUE)
+col_names <- names(data)
+data[,col_names] <- lapply(data[,col_names] , factor)
+head(data)
+```
+
+Next, in converting the prices, some of the data were in the thousands place, resulting in a replacement of the comma using the "gsub" method. I've also added a check to make sure there are no "N/As" in the Price column
+
+```{r}
+data$Market.Price <- as.numeric(gsub(",", "", data$Market.Price))
+head(data)
+
+
+na_data <- data[is.na(data$Market.Price),]
+head(na_data)
+
+
+```
+
+
+```{r}
+boxplot(data2$Market.Price~data2$Card.Type, xlab="Card Type", ylab="Market Price")
+```
+
+
+```{r}
+boxplot(data2$Market.Price~data2$Rarity, xlab="Rarity", ylab="Market Price")
+```
+
+The boxplots using data2 to visualize the spread of Market Price from Rarity and Card Type show quite a few data points extending past the general quantile range, particularly with the Pokemon Card Type and with Rarities such as Ultra Rare. These are your most valuable cards like the Shadowless Base Set Holo Charizard or the POP Series 5 Umbreon and Espeon Gold Star cards. In terms of analyzing for outliers, it'll be important to consider these as influential points, but do not think it's necessary to remove due to the fact these are indeed the market price for these cards within the dataset.
+
+
+# Part II Initial Modeling and Testing of Assumptions
+
+```{r}
+set.seed(101)
+sample <- sample.int(n=nrow(data), size=floor(.75*nrow(data)), replace=F)
+
+train_data <- data[sample,]
+test_data <- data[-sample,]
+
+model <- lm(Market.Price~ ., data=train_data)
+
+
+summary(model)
+```
+
+Looking at the summary, the p values for the majority of the printed coefficients are not significant. In addition with a R-squared of just 0.05126, there appears to be a lot of variability not explained by the model. However, the overall regression is significant with a p-value of less than 2.2e-16. With a p-value at about 0, it is significant at an alpha threshold of 0.01.
+
+
+```{r}
+r_squared <- summary(model)$r.squared
+max <- (1/(1-r_squared))
+vif(model)
+```
+After running a VIF of the model, there appears to be quite a bit of multicollinearity, especially in the Rarity category. Eight of the Eleven Rarity categories test positive for multicollinearity with values well above 10. The current model will most likely have an inflated standard error and have a less likelihood that the coefficient will be statistically significant as a result.
+
+```{r}
+resids = rstandard(model)
+fits = model$fitted.values
+plot(fits, resids, xlab="Fitted Values", ylab="Residuals", main="Scatterplot", col="darkblue");
+
+hist(resids, nclass=20, main="Histogram of Residuals")
+qqnorm(resids);qqline(resids)
+```
+
+```{r}
+cook <- cooks.distance(model)
+plot(cook, type="h", lwd=3, main="Cook's Distance", col="darkblue")
+
+bc <- boxcox(model)
+max_lambda <- bc$x[which.max(bc$y)]
+max_lambda
+```
+
+By looking at the residuals versus fitted scatterplot, the constant variance assumption appears to be violated with the variation increasing when moving to higher fitted values. In addition, the histogram shows a large right tail as does the qq-plot, indicating a violation in the normality assumption. When looking at the box cox maximum value of close to zero, with the other linear regression assumptions seemingly violated, it makes sense to perform a log transformation.
+
+# Part III Transforming Model & Testing Alternatives
+
+```{r}
+boxplot(log(data2$Market.Price)~data2$Card.Type, xlab="Card Type", ylab="Market Price");
+boxplot(log(data2$Market.Price)~data2$Rarity, xlab="Rarity", ylab="Market Price");
+```
+
+```{r}
+model2 <- lm(log(Market.Price)~ ., train_data)
+
+summary(model2)
+```
+
+The result of the Log-Linear transformation shows a significant improvement in the initial metrics. The two boxplots of the two categories visually show some between variability. Pokemon Card type showed having a higher mean than the other card types, specifically. With an improvement from 0.05 to 0.59 of the R-squared metric. The transformation of the response variable seemed to be an approach in the right direction.
+
+
+```{r}
+resids = rstandard(model2)
+fits = model2$fitted.values
+plot(fits, resids, xlab="Fitted Values", ylab="Residuals", main="Scatterplot", col="darkred")
+
+hist(resids, nclass=20, main="Histogram of Residuals", col="darkred")
+
+qqnorm(resids, col="darkred");qqline(resids)
+
+
+cook <- cooks.distance(model2)
+plot(cook, type="h",main="Cook's Distance", col="darkred")
+
+
+```
+
+Looking at the scatter plot, the constant variance assumption shows improvement with some noted clustering around the zero mark of the fitted values.
+
+The histogram of the residuals shows significant improvement. However, the qq-plot does still show some heavier tails. The Cook's distance shows one potential point worth looking into, but no values exceed a value of 1.
+```{r}
+data3 <- train_data[-c(2:12)]
+head(data3)
+
+model3 <- lm(log(Market.Price)~ ., data3)
+summary(model3)
+```
+```{r}
+vif(model3)
+
+resids = rstandard(model3)
+fits = model3$fitted.values
+plot(fits, resids, xlab="Fitted Values", ylab="Residuals", main="Scatterplot", col="darkred")
+
+hist(resids, nclass=20, main="Histogram of Residuals", col="darkred")
+
+qqnorm(resids, col="darkred");qqline(resids)
+```
+
+With the majority of the Rarity Category testing positive for multicollinearity, I decided to test the regression model for just Card Type. In comparing the adjusted R-squared, the model3 did from .588 to 0.413. However, there is no multicollinearity within model3. The assumptions of constant variance and normality are violated and are not as supported with model3 compared with model2. 
+
+```{r}
+anova(model3, model2)
+```
+It's worth noting that the ANOVA F-Test between the two models shows significance as well, indicating the additional Rarity categories significantly contribute to the explanation of market price with a p-value close to 0 with a 0.01 alpha threshold.
+
+
+```{r}
+data4 <- read.csv("rarity-card-type-v2.csv", header=TRUE)
+
+col_names <- names(data4)
+data4[,col_names] <- lapply(data4[,col_names] , factor)
+head(data4)
+
+data4$Market.Price <- as.numeric(gsub(",", "", data$Market.Price))
+
+na_data <- data[is.na(data$Market.Price),]
+head(na_data)
+
+set.seed(101)
+sample <- sample.int(n=nrow(data), size=floor(.75*nrow(data)), replace=F)
+
+train_data2 <- data4[sample,]
+test_data2 <- data4[-sample,]
+
+model4 <- lm(log(Market.Price)~ ., train_data2)
+
+summary(model4)
+
+resids = rstandard(model4)
+fits = model4$fitted.values
+plot(fits, resids, xlab="Fitted Values", ylab="Residuals", main="Scatterplot", col="darkred")
+
+hist(resids, nclass=20, main="Histogram of Residuals", col="darkred")
+
+qqnorm(resids, col="darkred");qqline(resids)
+
+vif(model4)
+
+anova(model2, model4)
+
+```
+In an effort to still include the rarity variable without multicollinearity, I've included an alternate dataset that has a new column "Rare". If the card is classified as any type of Rare, the card will be 1, if not, then the value is 0. The model here has done slightly better than model3 of only the Card Type, but still does not significantly compare to model2 with the partial F-test.
+
+
+
+# Part IV Prediction
+
+```{r}
+
+pred2 <- predict(model2, test_data, interval="prediction")
+pred3 <- predict(model3, test_data, interval="prediction")
+pred4 <- predict(model4, test_data2, interval="prediction")
+
+test.pred2 <- exp(pred2[,1])
+test.pred3 <- exp(pred3[,1])
+test.pred4 <- exp(pred4[,1])
+
+mean((test.pred2 - test_data$Market.Price)^2)
+mean((test.pred3 - test_data$Market.Price)^2)
+mean((test.pred4 - test_data2$Market.Price)^2)
+
+newpt <- data.frame(Rarity_Common=0, Rarity_Holo.Rare=1, Rarity_Prism.Rare=0, Rarity_Promo=0, Rarity_Rare=0, Rarity_Rare.Ace=0, Rarity_Rare.BREAK=0,
+                    Rarity_Secret.Rare=0, Rarity_Shiny.Holo.Rare=0, Rarity_Ultra.Rare=0, Rarity_Uncommon=0, Card.Type_Item=0, Card.Type_Pokemon=1,
+                    Card.Type_Stadium=0, Card.Type_Supporter=0, Card.Type_Tool=0)
+col_names <- names(newpt)
+newpt[,col_names] <- lapply(newpt[,col_names] , factor)
+
+newpt2 <- data.frame(Rare=1, Card.Type_Item=0, Card.Type_Pokemon=1, Card.Type_Stadium=0, Card.Type_Supporter=0, Card.Type_Tool=0)
+col_names <- names(newpt2)
+newpt2[,col_names] <- lapply(newpt2[,col_names] , factor)
+
+exp(predict(model2, newpt, interval="prediction", level=0.95))
+exp(predict(model4, newpt2, interval="prediction", level=0.95))
+```
+After evaluating the MSE of all three models, model2 and model4 appear to be close and are better than model3. Analyzing the same data point for both of these models, the fit for the value is around 15 dollars with a lwr bound of 1.5/1.1 and an upper bound of 150/210. 
+
+
+
+# Part V Conclusions
+In the exploration of multiple linear regression of this dataset, it appears that the type of card and the rarity of the card do appear to be significant factors in explaining the price of each Pokemon card. However, in terms of predictive power, the models produced with only these two factors into account are not very robust, with showing a wide range in terms of prediction intervals. Given the values of the adjusted R-squared as well, there appears to be further variation not explained by the model tested here. Intuitively, I think this makes sense. In the context of Pokemon cards, the value of each card does not necessarily only depend on which type and the rarity, but also the type of Pokemon on the card. Therefore, while multiple linear regression ended up being a good approach for this data set, there is perhaps another model with consideration of additional variables that could add better predictive power. 
